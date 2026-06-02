@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Semgrep Report Viewer</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel-2: #1d212c;
+    --border: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #9aa3b2;
+    --accent: #5b9dff;
+    --error: #ff5c5c;
+    --warning: #ffb020;
+    --info: #4dabf7;
+    --ok: #3ddc84;
+    --code-bg: #0b0d12;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .logo { font-size: 22px; }
+  .spacer { flex: 1; }
+  button, label.btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover, label.btn:hover { background: #262b38; border-color: #3a4150; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+  button.primary:hover { background: #6fa9ff; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+  /* Drop zone */
+  #drop {
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    padding: 64px 24px;
+    text-align: center;
+    color: var(--muted);
+    transition: border-color .15s, background .15s;
+    cursor: pointer;
+  }
+  #drop.drag { border-color: var(--accent); background: rgba(91,157,255,.07); color: var(--text); }
+  #drop .big { font-size: 48px; margin-bottom: 8px; }
+  #drop h2 { margin: 8px 0; color: var(--text); font-weight: 600; }
+  #drop p { margin: 4px 0; }
+  #drop .hint { font-size: 12px; margin-top: 14px; }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card .num { font-size: 30px; font-weight: 700; line-height: 1; }
+  .card .lbl { color: var(--muted); font-size: 12px; margin-top: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .card.error .num { color: var(--error); }
+  .card.warning .num { color: var(--warning); }
+  .card.info .num { color: var(--info); }
+
+  .meta-bar { color: var(--muted); font-size: 12px; margin-bottom: 18px; display:flex; gap:18px; flex-wrap:wrap; }
+  .meta-bar b { color: var(--text); font-weight: 600; }
+
+  /* Controls */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; align-items: center; }
+  .controls input[type="text"], .controls select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 12px; font-size: 13px;
+  }
+  .controls input[type="text"] { flex: 1; min-width: 220px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+    border-radius: 20px; border: 1px solid var(--border); cursor: pointer; font-size: 12px;
+    user-select: none; background: var(--panel-2);
+  }
+  .chip.active { border-color: var(--accent); background: rgba(91,157,255,.14); }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.error { background: var(--error); } .dot.warning { background: var(--warning); } .dot.info { background: var(--info); }
+
+  /* Findings */
+  .finding {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    margin-bottom: 14px; overflow: hidden;
+  }
+  .finding-head {
+    display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; cursor: pointer;
+  }
+  .finding-head:hover { background: var(--panel-2); }
+  .sev-badge {
+    flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 6px;
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .sev-badge.error { background: rgba(255,92,92,.16); color: var(--error); }
+  .sev-badge.warning { background: rgba(255,176,32,.16); color: var(--warning); }
+  .sev-badge.info { background: rgba(77,171,247,.16); color: var(--info); }
+  .finding-title { flex: 1; min-width: 0; }
+  .finding-title .rule { font-family: var(--mono); font-size: 12.5px; color: var(--accent); word-break: break-all; }
+  .finding-title .msg { margin-top: 4px; color: var(--text); }
+  .finding-title .loc { margin-top: 5px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .caret { color: var(--muted); transition: transform .15s; flex-shrink:0; margin-top:2px; }
+  .finding.open .caret { transform: rotate(90deg); }
+
+  .finding-body { display: none; padding: 0 16px 16px 16px; border-top: 1px solid var(--border); }
+  .finding.open .finding-body { display: block; }
+
+  .tags { display: flex; gap: 7px; flex-wrap: wrap; margin: 12px 0; }
+  .tag { font-size: 11px; padding: 3px 9px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); }
+  .tag b { color: var(--text); font-weight: 600; }
+
+  pre.code {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px;
+    margin: 10px 0; white-space: pre; tab-size: 2;
+  }
+  pre.code .ln { color: #4a5160; user-select: none; display: inline-block; width: 3.2em; text-align: right; padding-right: 1em; }
+  pre.code .hl { background: rgba(255,176,32,.10); display: block; }
+
+  .field { margin: 10px 0; }
+  .field .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .field a { color: var(--accent); text-decoration: none; word-break: break-all; }
+  .field a:hover { text-decoration: underline; }
+  .refs li { margin-bottom: 3px; }
+
+  .empty { text-align: center; color: var(--muted); padding: 48px; }
+  .errbox { background: rgba(255,92,92,.08); border: 1px solid rgba(255,92,92,.3); border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; }
+  .errbox h3 { margin: 0 0 8px; color: var(--error); font-size: 14px; }
+  .errbox ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+  .hidden { display: none !important; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+  @media (max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🛡️</span>
+  <h1>Semgrep Report Viewer <span id="headerCredit" style="color:var(--muted);font-weight:400;font-size:13px"></span></h1>
+  <span class="spacer"></span>
+  <label class="btn" id="loadBtn">📁 Open JSON<input type="file" id="file" accept=".json,application/json" hidden></label>
+  <button id="printBtn" class="hidden">🖨️ Print / PDF</button>
+  <button id="exportBtn" class="hidden">💾 Save HTML</button>
+  <button id="resetBtn" class="hidden">↺ New file</button>
+</header>
+
+<main>
+  <div id="drop">
+    <div class="big">📥</div>
+    <h2>Drop your Semgrep JSON here</h2>
+    <p>or click to browse</p>
+    <p class="hint">Generate it with <code>semgrep --json --output results.json</code> &nbsp;·&nbsp; Everything is processed locally in your browser — nothing is uploaded.</p>
+  </div>
+
+  <div id="report" class="hidden">
+    <div id="cards" class="cards"></div>
+    <div id="metabar" class="meta-bar"></div>
+    <div id="scanErrors"></div>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Search rule, message, file, CWE…">
+      <span class="chip active" data-sev="ERROR"><span class="dot error"></span>Errors <em id="cErr"></em></span>
+      <span class="chip active" data-sev="WARNING"><span class="dot warning"></span>Warnings <em id="cWarn"></em></span>
+      <span class="chip active" data-sev="INFO"><span class="dot info"></span>Info <em id="cInfo"></em></span>
+      <select id="sort">
+        <option value="severity">Sort: Severity</option>
+        <option value="file">Sort: File</option>
+        <option value="rule">Sort: Rule ID</option>
+      </select>
+      <select id="groupBy">
+        <option value="none">Group: None</option>
+        <option value="file">Group: File</option>
+        <option value="rule">Group: Rule</option>
+      </select>
+    </div>
+
+    <div id="findings"></div>
+  </div>
+</main>
+
+<footer>Semgrep Report Viewer · client-side · no data leaves your machine<br>
+  <span id="credit" style="color:var(--accent);font-weight:600"></span><br>
+  <a href="https://nayanacharya1.com.np" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">nayanacharya1.com.np</a></footer>
+
+<script>
+const $ = s => document.querySelector(s);
+
+/* ---------- Attribution integrity guard ----------
+   The author credit below is rendered from this constant and verified at
+   runtime. If the text is altered or removed, the checksum no longer matches
+   and the report will refuse to render. (Client-side: a determined editor can
+   still patch this, but a casual change to the credit will break the tool.) */
+const AUTHOR = "Designed by Nayan Acharya";
+const AUTHOR_SIG = 816313601;
+function _fnv1a(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h>>>0;}
+function integrityOK(){ return _fnv1a(AUTHOR) === AUTHOR_SIG; }
+function paintCredit(){
+  if (!integrityOK()) return;
+  const el = $('#credit');
+  if (el) el.textContent = AUTHOR;
+  const hc = $('#headerCredit');
+  if (hc) hc.textContent = '— ' + AUTHOR;
+}
+paintCredit();
+
+const SEV_ORDER = { ERROR: 0, WARNING: 1, INFO: 2 };
+let DATA = null;     // raw parsed json
+let RESULTS = [];    // normalized findings
+let META = {};
+
+const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// ---------- File loading ----------
+const drop = $('#drop');
+const fileInput = $('#file');
+$('#loadBtn').addEventListener('click', () => fileInput.click());
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) readFile(e.target.files[0]); });
+
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) readFile(f); });
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const json = JSON.parse(reader.result);
+      DATA = json;
+      META.filename = file.name;
+      buildReport(json);
+    } catch (err) {
+      alert('Could not parse JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ---------- Normalize ----------
+function normalize(json) {
+  const results = Array.isArray(json.results) ? json.results : [];
+  return results.map((r, i) => {
+    const extra = r.extra || {};
+    const md = extra.metadata || {};
+    const sev = (extra.severity || 'INFO').toUpperCase();
+    return {
+      idx: i,
+      check_id: r.check_id || '(unknown rule)',
+      path: r.path || '(unknown file)',
+      start: r.start || {},
+      end: r.end || {},
+      severity: ['ERROR','WARNING','INFO'].includes(sev) ? sev : 'INFO',
+      message: (extra.message || '').trim(),
+      lines: extra.lines || '',
+      fix: extra.fix || '',
+      metadata: md,
+      cwe: [].concat(md.cwe || []),
+      owasp: [].concat(md.owasp || []),
+      references: [].concat(md.references || []),
+      category: md.category || '',
+      confidence: md.confidence || '',
+      likelihood: md.likelihood || '',
+      impact: md.impact || '',
+      technology: [].concat(md.technology || []),
+      vulnClass: [].concat(md.vulnerability_class || []),
+    };
+  });
+}
+
+// ---------- Build ----------
+function buildReport(json) {
+  if (!integrityOK()) {
+    drop.classList.add('hidden');
+    $('#report').classList.add('hidden');
+    document.querySelector('main').innerHTML =
+      '<div class="empty">⛔ Integrity check failed.<br>This tool was designed by Nayan Acharya and the attribution has been tampered with.<br>Restore the original credit to use it.</div>';
+    return;
+  }
+  RESULTS = normalize(json);
+  drop.classList.add('hidden');
+  $('#report').classList.remove('hidden');
+  ['printBtn','exportBtn','resetBtn'].forEach(id => $('#'+id).classList.remove('hidden'));
+
+  const counts = { ERROR: 0, WARNING: 0, INFO: 0 };
+  RESULTS.forEach(r => counts[r.severity]++);
+
+  $('#cards').innerHTML = `
+    <div class="card"><div class="num">${RESULTS.length}</div><div class="lbl">Total findings</div></div>
+    <div class="card error"><div class="num">${counts.ERROR}</div><div class="lbl">Errors</div></div>
+    <div class="card warning"><div class="num">${counts.WARNING}</div><div class="lbl">Warnings</div></div>
+    <div class="card info"><div class="num">${counts.INFO}</div><div class="lbl">Info</div></div>
+    <div class="card"><div class="num">${new Set(RESULTS.map(r=>r.path)).size}</div><div class="lbl">Files affected</div></div>
+    <div class="card"><div class="num">${new Set(RESULTS.map(r=>r.check_id)).size}</div><div class="lbl">Unique rules</div></div>`;
+
+  const scanned = (json.paths && json.paths.scanned) ? json.paths.scanned.length : null;
+  $('#metabar').innerHTML = [
+    `Source: <b>${escapeHtml(META.filename)}</b>`,
+    json.version ? `Semgrep <b>v${escapeHtml(json.version)}</b>` : '',
+    scanned !== null ? `<b>${scanned}</b> files scanned` : '',
+    `Generated <b>${new Date().toLocaleString()}</b>`
+  ].filter(Boolean).join(' · ');
+
+  // scan errors
+  const errs = Array.isArray(json.errors) ? json.errors : [];
+  $('#scanErrors').innerHTML = errs.length ? `
+    <div class="errbox"><h3>⚠️ ${errs.length} scan error${errs.length>1?'s':''} reported by Semgrep</h3>
+    <ul>${errs.slice(0,20).map(e => `<li>${escapeHtml(e.message || e.short_msg || e.type || JSON.stringify(e))}</li>`).join('')}
+    ${errs.length>20?`<li>… and ${errs.length-20} more</li>`:''}</ul></div>` : '';
+
+  $('#cErr').textContent = `(${counts.ERROR})`;
+  $('#cWarn').textContent = `(${counts.WARNING})`;
+  $('#cInfo').textContent = `(${counts.INFO})`;
+
+  render();
+}
+
+// ---------- Render findings ----------
+function activeSevs() {
+  return [...document.querySelectorAll('.chip.active')].map(c => c.dataset.sev);
+}
+
+function render() {
+  const q = $('#search').value.trim().toLowerCase();
+  const sevs = activeSevs();
+  const sortBy = $('#sort').value;
+  const groupBy = $('#groupBy').value;
+
+  let list = RESULTS.filter(r => sevs.includes(r.severity));
+  if (q) {
+    list = list.filter(r =>
+      r.check_id.toLowerCase().includes(q) ||
+      r.message.toLowerCase().includes(q) ||
+      r.path.toLowerCase().includes(q) ||
+      r.cwe.join(' ').toLowerCase().includes(q) ||
+      r.owasp.join(' ').toLowerCase().includes(q) ||
+      r.lines.toLowerCase().includes(q)
+    );
+  }
+
+  const cmp = {
+    severity: (a,b) => SEV_ORDER[a.severity]-SEV_ORDER[b.severity] || a.path.localeCompare(b.path),
+    file: (a,b) => a.path.localeCompare(b.path) || (a.start.line||0)-(b.start.line||0),
+    rule: (a,b) => a.check_id.localeCompare(b.check_id),
+  }[sortBy];
+  list.sort(cmp);
+
+  const container = $('#findings');
+  if (!list.length) {
+    container.innerHTML = `<div class="empty">No findings match your filters.</div>`;
+    return;
+  }
+
+  if (groupBy === 'none') {
+    container.innerHTML = list.map(findingHtml).join('');
+  } else {
+    const key = groupBy === 'file' ? r => r.path : r => r.check_id;
+    const groups = {};
+    list.forEach(r => { const k = key(r); (groups[k] = groups[k] || []).push(r); });
+    container.innerHTML = Object.keys(groups).sort().map(k =>
+      `<div style="margin:22px 0 10px;font-weight:600;font-family:var(--mono);font-size:13px;color:var(--muted)">
+        ${escapeHtml(k)} <span style="color:var(--text)">(${groups[k].length})</span></div>` +
+      groups[k].map(findingHtml).join('')
+    ).join('');
+  }
+  bindToggles();
+}
+
+function locString(r) {
+  const s = r.start.line, e = r.end.line;
+  if (!s) return r.path;
+  const range = (e && e !== s) ? `${s}–${e}` : `${s}`;
+  const col = r.start.col ? `:${r.start.col}` : '';
+  return `${r.path}:${range}${col}`;
+}
+
+function codeBlock(r) {
+  if (!r.lines) return '';
+  const startLine = r.start.line || 1;
+  const rows = r.lines.replace(/\n$/,'').split('\n');
+  return `<pre class="code">${rows.map((ln,i) =>
+    `<span class="hl"><span class="ln">${startLine+i}</span>${escapeHtml(ln)||' '}</span>`).join('')}</pre>`;
+}
+
+function findingHtml(r) {
+  const sev = r.severity.toLowerCase();
+  const tags = [];
+  if (r.confidence) tags.push(`<span class="tag">Confidence: <b>${escapeHtml(r.confidence)}</b></span>`);
+  if (r.likelihood) tags.push(`<span class="tag">Likelihood: <b>${escapeHtml(r.likelihood)}</b></span>`);
+  if (r.impact) tags.push(`<span class="tag">Impact: <b>${escapeHtml(r.impact)}</b></span>`);
+  if (r.category) tags.push(`<span class="tag">Category: <b>${escapeHtml(r.category)}</b></span>`);
+  r.cwe.forEach(c => tags.push(`<span class="tag"><b>${escapeHtml(c)}</b></span>`));
+  r.owasp.forEach(o => tags.push(`<span class="tag"><b>${escapeHtml(o)}</b></span>`));
+  r.technology.forEach(t => tags.push(`<span class="tag">${escapeHtml(t)}</span>`));
+
+  const refs = r.references.length ? `
+    <div class="field"><div class="k">References</div>
+      <ul class="refs">${r.references.map(u => `<li><a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a></li>`).join('')}</ul>
+    </div>` : '';
+
+  const fix = r.fix ? `<div class="field"><div class="k">Suggested fix</div><pre class="code">${escapeHtml(r.fix)}</pre></div>` : '';
+
+  return `
+  <div class="finding" data-idx="${r.idx}">
+    <div class="finding-head">
+      <span class="sev-badge ${sev}">${escapeHtml(r.severity)}</span>
+      <div class="finding-title">
+        <div class="rule">${escapeHtml(r.check_id)}</div>
+        <div class="msg">${escapeHtml(r.message) || '<em style="color:var(--muted)">No message provided</em>'}</div>
+        <div class="loc">📄 ${escapeHtml(locString(r))}</div>
+      </div>
+      <span class="caret">▶</span>
+    </div>
+    <div class="finding-body">
+      ${tags.length ? `<div class="tags">${tags.join('')}</div>` : ''}
+      ${codeBlock(r)}
+      ${fix}
+      ${refs}
+    </div>
+  </div>`;
+}
+
+function bindToggles() {
+  document.querySelectorAll('.finding-head').forEach(h => {
+    h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
+  });
+}
+
+// ---------- Controls ----------
+$('#search').addEventListener('input', render);
+$('#sort').addEventListener('change', render);
+$('#groupBy').addEventListener('change', render);
+document.querySelectorAll('.chip').forEach(c =>
+  c.addEventListener('click', () => { c.classList.toggle('active'); render(); }));
+
+$('#resetBtn').addEventListener('click', () => {
+  DATA = null; RESULTS = []; fileInput.value = '';
+  $('#report').classList.add('hidden');
+  drop.classList.remove('hidden');
+  ['printBtn','exportBtn','resetBtn'].forEach(id => $('#'+id).classList.add('hidden'));
+});
+
+$('#printBtn').addEventListener('click', () => {
+  document.querySelectorAll('.finding').forEach(f => f.classList.add('open'));
+  window.print();
+});
+
+// Export a standalone HTML snapshot of the current report
+$('#exportBtn').addEventListener('click', () => {
+  const clone = document.documentElement.cloneNode(true);
+  // Open all findings in the export
+  clone.querySelectorAll('.finding').forEach(f => f.classList.add('open'));
+  // Remove interactive-only bits
+  clone.querySelectorAll('#loadBtn,#printBtn,#exportBtn,#resetBtn,#drop,.controls').forEach(e => e.remove());
+  const html = '<!DOCTYPE html>\n' + clone.outerHTML;
+  const blob = new Blob([html], { type: 'text/html' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (META.filename || 'semgrep').replace(/\.json$/i,'') + '-report.html';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// Print styling
+const printCss = document.createElement('style');
+printCss.media = 'print';
+printCss.textContent = `
+  header button, header label, .controls { display:none !important; }
+  body { background:#fff; color:#000; }
+  .finding, .card, .errbox { break-inside: avoid; border-color:#ccc; }
+  pre.code { background:#f5f5f5; color:#000; }
+`;
+document.head.appendChild(printCss);
+</script>
+</body>
+</html>
